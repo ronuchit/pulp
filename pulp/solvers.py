@@ -51,6 +51,7 @@ import collections
 import warnings
 from tempfile import mktemp
 from .constants import *
+from threading import Timer
 
 import logging
 log = logging.getLogger(__name__)
@@ -74,6 +75,9 @@ class PulpSolverError(PulpError):
     """
     Pulp Solver-related exceptions
     """
+    pass
+
+class PulpTimeoutError(PulpError):
     pass
 
 #import configuration information
@@ -1417,7 +1421,7 @@ class COIN_CMD(LpSolver_CMD):
         """True if the solver is available"""
         return self.executable(self.path)
 
-    def solve_CBC(self, lp, use_mps=True):
+    def solve_CBC(self, lp, use_mps=True, ttl=None):
         """Solve a MIP problem using CBC"""
         if not self.executable(self.path):
             raise PulpSolverError("Pulp: cannot execute %s cwd: %s"%(self.path,
@@ -1479,8 +1483,22 @@ class COIN_CMD(LpSolver_CMD):
         args.append(self.path)
         args.extend(cmds[1:].split())
         cbc = subprocess.Popen(args, stdout = pipe, stderr = pipe, stdin=devnull)
-        if cbc.wait() != 0:
-            raise PulpSolverError("Pulp: Error while trying to execute " +  \
+        if ttl is not None:
+            kill = lambda process: process.kill()
+            my_timer = Timer(ttl, kill, [cbc])
+
+            try:
+                my_timer.start()
+                if cbc.wait() != 0:
+                    raise PulpSolverError("Pulp: Error while trying to execute " +  \
+                                    self.path)
+            finally:
+                if not my_timer.isAlive():
+                    raise PulpTimeoutError("Pulp timed out!")
+                my_timer.cancel()
+        else:
+            if cbc.wait() != 0:
+                raise PulpSolverError("Pulp: Error while trying to execute " +  \
                                     self.path)
         if pipe:
             pipe.close()
